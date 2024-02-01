@@ -11,6 +11,14 @@ type emptyCell struct {
 	possibleValues []int
 }
 
+type regCell struct {
+	row   int
+	col   int
+	value int
+}
+
+// ____________________validation____________________
+
 func validateByRow(table [9][9]int, row, col, value int) bool {
 	for i := 0; i < len(table[row]); i++ {
 		if i == col {
@@ -66,6 +74,29 @@ func validateByBox(table [9][9]int, row, col, value int) bool {
 	return true
 }
 
+func validateOneCell(table [9][9]int, row, col, value int) bool {
+	return validateByBox(table, row, col, value) && validateByCol(table, row, col, value) && validateByRow(table, row, col, value)
+}
+
+func validateFullSudokuGrid(table [9][9]int) bool {
+	for i := 0; i < len(table); i++ {
+		for j := 0; j < len(table[i]); j++ {
+			if table[i][j] == 0 {
+				continue
+			}
+			isValidCell := validateOneCell(table, i, j, table[i][j])
+			if !isValidCell {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+//________________________________________
+
+// ____________________solvingSudoku____________________
+
 func findPossibleValues(table [9][9]int, row, col int) ([]int, error) {
 	res := []int{}
 	for i := 1; i <= 9; i++ {
@@ -80,20 +111,80 @@ func findPossibleValues(table [9][9]int, row, col int) ([]int, error) {
 	return res, nil
 }
 
+func fillSudokuGrid(table [9][9]int, emptyCells []regCell) [9][9]int {
+	for i := 0; i < len(emptyCells); i++ {
+		table[emptyCells[i].row][emptyCells[i].col] = emptyCells[i].value
+	}
+	return table
+}
+
+func findValidTables(tables [][9][9]int, table [9][9]int, emptyCells []emptyCell, emptyCellsIndex int, tmp []regCell) [][9][9]int {
+	if len(tmp) > 0 && !validateOneCell(table, tmp[len(tmp)-1].row, tmp[len(tmp)-1].col, tmp[len(tmp)-1].value) {
+		return tables
+	}
+	if len(tmp) == len(emptyCells) {
+		tempTable := fillSudokuGrid(table, tmp)
+		tables = append(tables, tempTable)
+		return tables
+	}
+	table = fillSudokuGrid(table, tmp)
+	for j := 0; j < len(emptyCells[emptyCellsIndex].possibleValues); j++ {
+
+		// if there were multiple answers only return the first and second answers and stop the progress
+		if len(tables) > 1 {
+			break
+		}
+		tables = findValidTables(tables, table, emptyCells, emptyCellsIndex+1, append(tmp, regCell{
+			row:   emptyCells[emptyCellsIndex].row,
+			col:   emptyCells[emptyCellsIndex].col,
+			value: emptyCells[emptyCellsIndex].possibleValues[j],
+		}))
+	}
+	return tables
+}
+
+func solveSudoku(table [9][9]int, emptyCells []emptyCell) ([][9][9]int, error) {
+	tables := findValidTables([][9][9]int{}, table, emptyCells, 0, []regCell{})
+	if len(tables) > 0 {
+		return tables, nil
+	}
+	return [][9][9]int{}, fmt.Errorf("this Sudoku grid has no answer")
+}
+
+// ________________________________________
+
+func printTable(table [9][9]int) {
+	for i := 0; i < len(table); i++ {
+		for j := 0; j < len(table[i]); j++ {
+			fmt.Printf("%v ", table[i][j])
+			if j == 2 || j == 5 {
+				fmt.Printf("| ")
+			}
+		}
+		fmt.Println()
+		if i == 2 || i == 5 {
+			fmt.Printf("----------------------\n")
+		}
+	}
+}
+
 func main() {
 	table := [9][9]int{
-		{5, 3, 0, 0, 7, 0, 0, 0, 0},
-		{6, 0, 0, 1, 9, 5, 0, 0, 0},
-		{0, 9, 8, 0, 0, 0, 0, 6, 0},
-		{8, 0, 0, 0, 6, 0, 0, 0, 3},
-		{4, 0, 0, 8, 0, 3, 0, 0, 1},
-		{7, 0, 0, 0, 2, 0, 0, 0, 6},
-		{0, 6, 0, 0, 0, 0, 2, 8, 0},
-		{0, 0, 0, 4, 1, 9, 0, 0, 5},
-		{0, 0, 0, 0, 8, 0, 0, 7, 9},
+		{0, 0, 0, 0, 0, 0, 0, 0, 1},
+		{0, 0, 0, 0, 0, 0, 0, 0, 0},
+		{0, 0, 0, 0, 0, 0, 0, 0, 0},
+		{0, 0, 0, 0, 0, 0, 0, 0, 0},
+		{0, 0, 0, 0, 0, 0, 0, 0, 0},
+		{0, 0, 0, 0, 0, 0, 0, 0, 0},
+		{0, 0, 0, 0, 0, 0, 0, 0, 0},
+		{0, 0, 0, 0, 0, 0, 0, 0, 0},
+		{0, 0, 0, 0, 0, 0, 0, 0, 0},
 	}
 	emptyCells := make([]emptyCell, 0, 81)
 	// cellsPermutation := make([]emptyCell, 0)
+	if !validateFullSudokuGrid(table) {
+		log.Fatalf("invalid Sudoku gird")
+	}
 	for i := 0; i < len(table); i++ {
 		for j := 0; j < len(table[i]); j++ {
 			if table[i][j] == 0 {
@@ -109,7 +200,11 @@ func main() {
 			}
 		}
 	}
+	tables, err := solveSudoku(table, emptyCells)
+	if err != nil {
+		log.Fatalf("invalid grid Sudoku because of:\n%v", err.Error())
+	}
 
-	fmt.Println(emptyCells)
-
+	//fmt.Println(ttmp)
+	printTable(tables[0])
 }
