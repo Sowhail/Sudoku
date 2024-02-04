@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"math/rand"
+	"time"
 )
 
 type emptyCell struct {
@@ -21,7 +24,7 @@ type regCell struct {
 
 func validateByRow(table [9][9]int, row, col, value int) bool {
 	for i := 0; i < len(table[row]); i++ {
-		if i == col {
+		if i == col || table[row][i] == 0 {
 			continue
 		}
 		if table[row][i] == value {
@@ -33,7 +36,7 @@ func validateByRow(table [9][9]int, row, col, value int) bool {
 
 func validateByCol(table [9][9]int, row, col, value int) bool {
 	for i := 0; i < len(table[col]); i++ {
-		if i == row {
+		if i == row || table[i][col] == 0 {
 			continue
 		}
 		if table[i][col] == value {
@@ -63,7 +66,7 @@ func validateByBox(table [9][9]int, row, col, value int) bool {
 	setBox(&colStart, &colEnd, col)
 	for i := rowStart; i <= rowEnd; i++ {
 		for j := colStart; j <= colEnd; j++ {
-			if i == row && col == j {
+			if (i == row && col == j) || table[i][j] == 0 {
 				continue
 			}
 			if table[i][j] == value {
@@ -98,7 +101,7 @@ func validateFullSudokuGrid(table [9][9]int) bool {
 // ____________________solvingSudoku____________________
 
 func findPossibleValues(table [9][9]int, row, col int) ([]int, error) {
-	res := []int{}
+	var res []int
 	for i := 1; i <= 9; i++ {
 		isValid := validateByBox(table, row, col, i) && validateByCol(table, row, col, i) && validateByRow(table, row, col, i)
 		if isValid {
@@ -118,37 +121,72 @@ func fillSudokuGrid(table [9][9]int, emptyCells []regCell) [9][9]int {
 	return table
 }
 
-func findValidTables(tables [][9][9]int, table [9][9]int, emptyCells []emptyCell, emptyCellsIndex int, tmp []regCell) [][9][9]int {
-	if len(tmp) > 0 && !validateOneCell(table, tmp[len(tmp)-1].row, tmp[len(tmp)-1].col, tmp[len(tmp)-1].value) {
-		return tables
-	}
-	if len(tmp) == len(emptyCells) {
-		tempTable := fillSudokuGrid(table, tmp)
-		tables = append(tables, tempTable)
-		return tables
-	}
-	table = fillSudokuGrid(table, tmp)
-	for j := 0; j < len(emptyCells[emptyCellsIndex].possibleValues); j++ {
-
-		// if there were multiple answers only return the first and second answers and stop the progress
-		if len(tables) > 1 {
-			break
+func findEmptyCells(table [9][9]int) ([]emptyCell, error) {
+	emptyCells := make([]emptyCell, 0, 81)
+	for i := 0; i < len(table); i++ {
+		for j := 0; j < len(table[i]); j++ {
+			if table[i][j] == 0 {
+				values, err := findPossibleValues(table, i, j)
+				if err != nil {
+					return nil, err
+				}
+				emptyCells = append(emptyCells, emptyCell{
+					row:            i,
+					col:            j,
+					possibleValues: values,
+				})
+			}
 		}
-		tables = findValidTables(tables, table, emptyCells, emptyCellsIndex+1, append(tmp, regCell{
-			row:   emptyCells[emptyCellsIndex].row,
-			col:   emptyCells[emptyCellsIndex].col,
-			value: emptyCells[emptyCellsIndex].possibleValues[j],
-		}))
 	}
-	return tables
+	return emptyCells, nil
 }
 
-func solveSudoku(table [9][9]int, emptyCells []emptyCell) ([][9][9]int, error) {
-	tables := findValidTables([][9][9]int{}, table, emptyCells, 0, []regCell{})
+func findValidTables(tables [][9][9]int, table [9][9]int, emptyCells []emptyCell, emptyCellsIndex int, tmp []regCell, ctx context.Context) [][9][9]int {
+	select {
+	case <-ctx.Done():
+		return tables
+	default:
+		if len(tmp) > 0 && !validateOneCell(table, tmp[len(tmp)-1].row, tmp[len(tmp)-1].col, tmp[len(tmp)-1].value) {
+			return tables
+		}
+		if len(tmp) == len(emptyCells) {
+			tempTable := fillSudokuGrid(table, tmp)
+			tables = append(tables, tempTable)
+			return tables
+		}
+		table = fillSudokuGrid(table, tmp)
+		for j := 0; j < len(emptyCells[emptyCellsIndex].possibleValues); j++ {
+
+			// if there were multiple answers only return the first and second answers and stop the progress
+			if len(tables) > 1 {
+				break
+			}
+			tables = findValidTables(tables, table, emptyCells, emptyCellsIndex+1, append(tmp, regCell{
+				row:   emptyCells[emptyCellsIndex].row,
+				col:   emptyCells[emptyCellsIndex].col,
+				value: emptyCells[emptyCellsIndex].possibleValues[j],
+			}), ctx)
+		}
+		return tables
+	}
+}
+
+func solveSudoku(table [9][9]int) ([][9][9]int, error) {
+	if !validateFullSudokuGrid(table) {
+		return nil, fmt.Errorf("invalid Sudoku gird")
+	}
+	emptyCells, err := findEmptyCells(table)
+	if err != nil {
+		return nil, err
+	}
+	// using time out in case if the table had no answer and took too long for backtracking
+	ctx, cancel := context.WithTimeout(context.Background(), 1300*time.Millisecond)
+	defer cancel()
+	tables := findValidTables([][9][9]int{}, table, emptyCells, 0, []regCell{}, ctx)
 	if len(tables) > 0 {
 		return tables, nil
 	}
-	return [][9][9]int{}, fmt.Errorf("this Sudoku grid has no answer")
+	return nil, fmt.Errorf("this Sudoku grid has no answer")
 }
 
 // ________________________________________
@@ -168,9 +206,27 @@ func printTable(table [9][9]int) {
 	}
 }
 
-func main() {
+// _______________________GeneratingSudoku_______________________
+
+func fillTableRandomly(table [9][9]int) [9][9]int {
+	numberOfFilledCells := rand.Intn(6) + 10
+	for i := 0; i < numberOfFilledCells; i++ {
+		value := rand.Intn(9) + 1
+		row := rand.Intn(9)
+		col := rand.Intn(9)
+		for !validateOneCell(table, row, col, value) {
+			value = rand.Intn(9) + 1
+			row = rand.Intn(9)
+			col = rand.Intn(9)
+		}
+		table[row][col] = value
+	}
+	return table
+}
+
+func generateCompleteTable() [9][9]int {
 	table := [9][9]int{
-		{0, 0, 0, 0, 0, 0, 0, 0, 1},
+		{0, 0, 0, 0, 0, 0, 0, 0, 0},
 		{0, 0, 0, 0, 0, 0, 0, 0, 0},
 		{0, 0, 0, 0, 0, 0, 0, 0, 0},
 		{0, 0, 0, 0, 0, 0, 0, 0, 0},
@@ -180,31 +236,78 @@ func main() {
 		{0, 0, 0, 0, 0, 0, 0, 0, 0},
 		{0, 0, 0, 0, 0, 0, 0, 0, 0},
 	}
-	emptyCells := make([]emptyCell, 0, 81)
-	// cellsPermutation := make([]emptyCell, 0)
-	if !validateFullSudokuGrid(table) {
-		log.Fatalf("invalid Sudoku gird")
+	table = fillTableRandomly(table)
+	tables, err := solveSudoku(table)
+	for err != nil {
+		table = [9][9]int{}
+		table = fillTableRandomly(table)
+		tables, err = solveSudoku(table)
 	}
+	return tables[0]
+}
+
+func makeIncompleteTable(table [9][9]int) ([9][9]int, error) {
+	numberOfEmptyCells := 50
+	res := table
+	for i := 0; i < numberOfEmptyCells; i++ {
+		row := rand.Intn(9)
+		col := rand.Intn(9)
+		if res[row][col] == 0 {
+			i--
+			continue
+		}
+		res[row][col] = 0
+	}
+	tables, err := solveSudoku(res)
+	for len(tables) != 1 {
+		res = table
+		for i := 0; i < numberOfEmptyCells; i++ {
+			row := rand.Intn(9)
+			col := rand.Intn(9)
+			if res[row][col] == 0 {
+				i--
+				continue
+			}
+			res[row][col] = 0
+		}
+		tables, err = solveSudoku(res)
+	}
+	if err != nil {
+		return [9][9]int{}, fmt.Errorf("this is never gonna happen")
+	}
+	return res, nil
+}
+
+func main() {
+	table := generateCompleteTable()
+	fmt.Printf("complete table:\n\n")
+	printTable(table)
+	fmt.Println()
+
+	table, err := makeIncompleteTable(table)
+	if err != nil {
+		fmt.Println("this error is supposed to never happen")
+	}
+	fmt.Printf("question table:\n\n")
+	printTable(table)
+	fmt.Println()
+
+	ctr := 0
 	for i := 0; i < len(table); i++ {
 		for j := 0; j < len(table[i]); j++ {
 			if table[i][j] == 0 {
-				values, err := findPossibleValues(table, i, j)
-				if err != nil {
-					log.Fatalf("invalid grid Sudoku beacause:\n%v", err.Error())
-				}
-				emptyCells = append(emptyCells, emptyCell{
-					row:            i,
-					col:            j,
-					possibleValues: values,
-				})
+				ctr++
 			}
 		}
 	}
-	tables, err := solveSudoku(table, emptyCells)
-	if err != nil {
-		log.Fatalf("invalid grid Sudoku because of:\n%v", err.Error())
-	}
+	fmt.Printf("the number of emptyCells: %v \n\n\n", ctr)
 
-	//fmt.Println(ttmp)
+	tables, err := solveSudoku(table)
+	if err != nil {
+		log.Fatalf("invalid grid Sudoku\n error: %v", err.Error())
+	}
+	fmt.Printf("Answer table:\n")
 	printTable(tables[0])
+	fmt.Println()
+	fmt.Println("number of found tables: ", len(tables))
 }
