@@ -194,7 +194,14 @@ func solveSudoku(table [9][9]int) ([][9][9]int, error) {
 func printTable(table [9][9]int) {
 	for i := 0; i < len(table); i++ {
 		for j := 0; j < len(table[i]); j++ {
-			fmt.Printf("%v ", table[i][j])
+			if table[i][j] == 0 {
+				whiteText := "\033[31m"
+				greenBackground := "\033[47m"
+				reset := "\033[0m"
+				fmt.Printf("%v%v%v%v ", whiteText, greenBackground, table[i][j], reset)
+			} else {
+				fmt.Printf("%v ", table[i][j])
+			}
 			if j == 2 || j == 5 {
 				fmt.Printf("| ")
 			}
@@ -246,52 +253,61 @@ func generateCompleteTable() [9][9]int {
 	return tables[0]
 }
 
-func makeIncompleteTable(table [9][9]int) ([9][9]int, error) {
-	numberOfEmptyCells := 50
-	res := table
-	for i := 0; i < numberOfEmptyCells; i++ {
-		row := rand.Intn(9)
-		col := rand.Intn(9)
-		if res[row][col] == 0 {
-			i--
-			continue
-		}
-		res[row][col] = 0
-	}
-	tables, err := solveSudoku(res)
-	for len(tables) != 1 {
-		res = table
-		for i := 0; i < numberOfEmptyCells; i++ {
-			row := rand.Intn(9)
-			col := rand.Intn(9)
-			if res[row][col] == 0 {
-				i--
-				continue
+func findFilledCells(table [9][9]int) []regCell {
+	var res []regCell
+	for i := 0; i < len(table); i++ {
+		for j := 0; j < len(table[i]); j++ {
+			if table[i][j] != 0 {
+				res = append(res, regCell{
+					row:   i,
+					col:   j,
+					value: table[i][j],
+				})
 			}
-			res[row][col] = 0
 		}
-		tables, err = solveSudoku(res)
 	}
-	if err != nil {
-		return [9][9]int{}, fmt.Errorf("this is never gonna happen")
+	return res
+}
+
+func makeIncompleteTable(table [9][9]int, numberOfWantedEmptyCells int, ctx context.Context) ([9][9]int, bool) {
+	select {
+	case <-ctx.Done():
+		if tables, err := solveSudoku(table); len(tables) != 1 || err != nil {
+			return table, false
+		}
+		return table, true
+	default:
+		if tables, err := solveSudoku(table); len(tables) != 1 || err != nil {
+			return table, false
+		}
+		if numberOfWantedEmptyCells == 0 {
+			return table, true
+		}
+
+		filledCells := findFilledCells(table)
+		rnd := rand.Intn(len(filledCells))
+		for table[filledCells[rnd].row][filledCells[rnd].col] == 0 {
+			rnd = rand.Intn(len(filledCells))
+		}
+		value := table[filledCells[rnd].row][filledCells[rnd].col]
+		table[filledCells[rnd].row][filledCells[rnd].col] = 0
+		table, isCorrect := makeIncompleteTable(table, numberOfWantedEmptyCells-1, ctx)
+		if !isCorrect {
+			table[filledCells[rnd].row][filledCells[rnd].col] = value
+			table, _ = makeIncompleteTable(table, numberOfWantedEmptyCells, ctx)
+		}
+
+		return table, true
 	}
-	return res, nil
 }
 
 func main() {
 	table := generateCompleteTable()
-	fmt.Printf("complete table:\n\n")
-	printTable(table)
-	fmt.Println()
 
-	table, err := makeIncompleteTable(table)
-	if err != nil {
-		fmt.Println("this error is supposed to never happen")
-	}
-	fmt.Printf("question table:\n\n")
-	printTable(table)
-	fmt.Println()
-
+	ctx, cancel := context.WithTimeout(context.Background(), 1100*time.Millisecond)
+	defer cancel()
+	emptyCellsNumber := rand.Intn(16) + 45
+	table, _ = makeIncompleteTable(table, emptyCellsNumber, ctx)
 	ctr := 0
 	for i := 0; i < len(table); i++ {
 		for j := 0; j < len(table[i]); j++ {
@@ -300,14 +316,15 @@ func main() {
 			}
 		}
 	}
-	fmt.Printf("the number of emptyCells: %v \n\n\n", ctr)
+	fmt.Printf("\nthe number of emptyCells: %v \n", ctr)
+	fmt.Printf("question table:\n")
+	printTable(table)
+	fmt.Println()
 
 	tables, err := solveSudoku(table)
 	if err != nil {
 		log.Fatalf("invalid grid Sudoku\n error: %v", err.Error())
 	}
-	fmt.Printf("Answer table:\n")
+	fmt.Printf("\n\nAnswer table:\n")
 	printTable(tables[0])
-	fmt.Println()
-	fmt.Println("number of found tables: ", len(tables))
 }
